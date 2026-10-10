@@ -191,3 +191,39 @@ def test_logs_filter_by_notes_prefix_and_order(client, token, owner):
     found = client.get("/v1/habit-logs", headers=headers,
                        params={"habit_id": habit["id"], "notes_prefix": "Strava:", "order": "desc"}).json()["items"]
     assert [l["log_date"] for l in found] == ["2026-10-01"]
+
+
+def test_streak_fields_cannot_be_written(client, token, owner):
+    headers = token(*owner)
+    habit = create_habit(client, headers)
+    for field, value in (("best_streak", 0), ("current_streak", 9), ("last_completed_at", "2026-01-01")):
+        assert client.patch(f"/v1/habits/{habit['id']}", headers=headers, json={field: value}).status_code == 422
+    assert client.post("/v1/habits", headers=headers, json={"name": "x", "slug": slug(), "best_streak": 5}).status_code == 422
+
+
+def test_streak_read_is_as_of_today(client, token, owner, cluster):
+    from datetime import timedelta
+
+    from solo_habits.app import today_local
+
+    headers = token(*owner)
+    habit = create_habit(client, headers)
+    old = today_local() - timedelta(days=5)
+    client.put(f"/v1/habits/{habit['id']}/logs/{old.isoformat()}", headers=headers, json={})
+    with cluster.connect("postgres", "habits") as conn:  # stored value from a past day
+        conn.execute("UPDATE habits.habits SET current_streak = 4, best_streak = 4 WHERE id = %s", (habit["id"],))
+    seen = client.get(f"/v1/habits/{habit['id']}", headers=headers).json()
+    assert (seen["current_streak"], seen["best_streak"]) == (0, 4)
+    listed = [h for h in client.get("/v1/habits", headers=headers).json()["items"] if h["id"] == habit["id"]][0]
+    assert listed["current_streak"] == 0
+
+
+def test_concurrent_first_logs_of_one_day_both_succeed(client, token, owner):
+    from concurrent.futures import ThreadPoolExecutor
+
+    headers = token(*owner)
+    habit = create_habit(client, headers)
+    path = f"/v1/habits/{habit['id']}/logs/2026-09-01"
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        codes = list(pool.map(lambda _: client.put(path, headers=headers, json={}).status_code, range(2)))
+    assert codes == [200, 200]

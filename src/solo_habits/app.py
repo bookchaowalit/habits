@@ -28,7 +28,7 @@ from typing import Annotated, Any, Literal
 import psycopg
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request as HttpRequest
 from psycopg.rows import dict_row
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from solo_habits.auth import Principal, TokenVerifier, Unauthenticated
 from solo_habits.platform import Action, Denied, Platform, PlatformUnavailable
@@ -49,6 +49,9 @@ RoutineStatus = Literal["active", "paused", "archived"]
 # --- models --------------------------------------------------------------------------------------
 
 class HabitFields(BaseModel):
+    # The streak fields are derived from the logs by the service; a write that names them is refused.
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, min_length=1, max_length=200)
     slug: str | None = Field(default=None, pattern=SLUG)
     description: str | None = Field(default=None, max_length=4000)
@@ -58,9 +61,6 @@ class HabitFields(BaseModel):
     target_duration_minutes: int | None = Field(default=None, ge=0, le=100000)
     status: HabitStatus | None = None
     priority: int | None = Field(default=None, ge=0, le=10)
-    current_streak: int | None = Field(default=None, ge=0)
-    best_streak: int | None = Field(default=None, ge=0)
-    last_completed_at: date | None = None
     schedule_days: list[str] | None = None
     preferred_time: str | None = Field(default=None, max_length=40)
     notes: str | None = Field(default=None, max_length=8000)
@@ -100,6 +100,8 @@ class Habit(BaseModel):
 
 
 class RoutineFields(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(default=None, min_length=1, max_length=200)
     slug: str | None = Field(default=None, pattern=SLUG)
     description: str | None = Field(default=None, max_length=4000)
@@ -135,6 +137,8 @@ class Routine(BaseModel):
 
 
 class HabitLogPut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     completed: bool | None = None
     count: int | None = Field(default=None, ge=0, le=100000)
     duration_minutes: int | None = Field(default=None, ge=0, le=100000)
@@ -155,6 +159,8 @@ class HabitLog(BaseModel):
 
 
 class RoutineLogPut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     completed_steps: list[Any] | None = None
     skipped_steps: list[Any] | None = None
     duration_minutes: int | None = Field(default=None, ge=0, le=100000)
@@ -425,7 +431,7 @@ def create_app(connect: Callable[[], psycopg.Connection], verifier: TokenVerifie
         columns = kind.log_columns if logs else kind.columns
         required = LOG_REQUIRED if logs else kind.required
         json_columns = kind.log_json_columns if logs else kind.json_columns
-        data = {name: getattr(body, name) for name in columns if name in names}
+        data = {name: getattr(body, name) for name in columns if name in names and hasattr(body, name)}
         nulls = sorted(name for name in required if name in data and data[name] is None)
         if nulls:
             raise HTTPException(status_code=422, detail={"error": "invalid_value", "fields": nulls})
@@ -458,6 +464,22 @@ def create_app(connect: Callable[[], psycopg.Connection], verifier: TokenVerifie
             " last_completed_at = %s, version = version + 1, updated_at = now()"
             " WHERE id = %s AND (current_streak, last_completed_at) IS DISTINCT FROM (%s, %s)",
             (current, current, last, habit_id, current, last))
+
+    def as_of_today(conn: psycopg.Connection, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Habits with current_streak as of the owner's today (a missed day breaks it before any new log)."""
+        if not rows:
+            return rows
+        today = today_local()
+        done: dict[int, set[date]] = {}
+        for row in conn.execute("SELECT habit_id, log_date FROM habits.habit_logs WHERE habit_id = ANY(%s)"
+                                " AND completed AND log_date >= %s",
+                                ([r["id"] for r in rows], date.fromordinal(today.toordinal() - 400))):
+            done.setdefault(row["habit_id"], set()).add(row["log_date"])
+        out = []
+        for row in rows:
+            current = streak(done.get(row["id"], set()), row["schedule_days"], today)
+            out.append({**row, "current_streak": current, "best_streak": max(row["best_streak"], current)})
+        return out
 
     def load(conn: psycopg.Connection, kind: Kind, record_id: int, *, lock: bool = False) -> dict[str, Any]:
         row = conn.execute(f"SELECT {kind.select} FROM {kind.table} WHERE id = %s{' FOR UPDATE' if lock else ''}",
@@ -502,6 +524,8 @@ def create_app(connect: Callable[[], psycopg.Connection], verifier: TokenVerifie
             with bound(caller) as conn:
                 rows = conn.execute(f"SELECT {kind.select} FROM {kind.table} WHERE {' AND '.join(where)}"
                                     " ORDER BY id LIMIT %s OFFSET %s", [*params, limit, offset]).fetchall()
+                if kind is HABIT:
+                    rows = as_of_today(conn, rows)
             return Items(items=[model(**row).model_dump(mode="json") for row in rows])
 
         @app.get(f"/v1/{plural}/stats", response_model=Stats, name=f"stats_{plural}")
@@ -518,6 +542,8 @@ def create_app(connect: Callable[[], psycopg.Connection], verifier: TokenVerifie
             allow(caller, kind.permission("read"), kind.name, not_found=True)
             with bound(caller) as conn:
                 row = conn.execute(f"SELECT {kind.select} FROM {kind.table} WHERE slug = %s", (slug,)).fetchone()
+                if row is not None and kind is HABIT:
+                    row = as_of_today(conn, [row])[0]
             if row is None:
                 raise HTTPException(status_code=404, detail={"error": "not_found"})
             return model(**row)
@@ -526,7 +552,8 @@ def create_app(connect: Callable[[], psycopg.Connection], verifier: TokenVerifie
         def get_record(record_id: int, caller: Caller):
             allow(caller, kind.permission("read"), kind.name, str(record_id), not_found=True)
             with bound(caller) as conn:
-                return model(**load(conn, kind, record_id))
+                row = load(conn, kind, record_id)
+                return model(**(as_of_today(conn, [row])[0] if kind is HABIT else row))
 
         @app.post(f"/v1/{plural}", status_code=201, response_model=model, name=f"create_{kind.name}")
         def create(body: create_model, caller: Caller, background: BackgroundTasks,  # type: ignore[valid-type]
@@ -632,7 +659,7 @@ def create_app(connect: Callable[[], psycopg.Connection], verifier: TokenVerifie
             data = values(kind, body, body.model_fields_set, logs=True)
 
             def op(work: Work) -> Plan:
-                load(work.conn, kind, record_id)
+                load(work.conn, kind, record_id, lock=True)  # serializes writes to this record's logs
                 before = work.conn.execute(f"SELECT {kind.log_select} FROM {kind.log_table}"
                                            f" WHERE {kind.log_key} = %s AND log_date = %s FOR UPDATE",
                                            (record_id, log_date)).fetchone()
@@ -663,6 +690,7 @@ def create_app(connect: Callable[[], psycopg.Connection], verifier: TokenVerifie
         @app.delete(f"/v1/{plural}/{{record_id}}/logs/{{log_date}}", status_code=204, name=f"delete_{kind.name}_log")
         def delete_log(record_id: int, log_date: date, caller: Caller) -> None:
             def op(work: Work) -> Plan:
+                load(work.conn, kind, record_id, lock=True)
                 before = work.conn.execute(f"SELECT {kind.log_select} FROM {kind.log_table}"
                                            f" WHERE {kind.log_key} = %s AND log_date = %s FOR UPDATE",
                                            (record_id, log_date)).fetchone()
