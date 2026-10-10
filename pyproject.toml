@@ -1,0 +1,31 @@
+[project]
+name = "solo-habits"
+version = "0.1.0"
+description = "Habits cell: habits, routines and their daily logs, with its own database"
+requires-python = ">=3.12"
+dependencies = [
+    "psycopg[binary]>=3.2,<4",
+    "fastapi>=0.115,<1",
+    "pyjwt[crypto]>=2.10,<3",
+    "uvicorn>=0.30,<1",
+    "httpx>=0.27,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pgserver>=0.1.4"]
+
+[project.scripts]
+habits-api = "solo_habits.app:main"
+habits-publish = "solo_habits.publisher:main"
+habits-db = "solo_habits.db:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
