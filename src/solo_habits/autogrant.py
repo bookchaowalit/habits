@@ -2,7 +2,7 @@
 
 Runs as the cell's cron service (``habits-autogrant``), replacing the retired local
 cron job ``weekly_habit_autogranted``. For each active habit and each of the last
-``--days`` days (default 7, ending yesterday in Asia/Bangkok) that falls on one of
+``--days`` days (default 14, ending yesterday in Asia/Bangkok) that falls on one of
 the habit's ``schedule_days`` (every day when none is set), a day without a
 completed log gets one (``completed: true, count: 1``, note ``auto-granted (weekly
 batch)``). Streaks stay the service's job: every log recomputes them.
@@ -11,8 +11,9 @@ Everything goes through the habits cell's own public HTTP API with the
 ``habit-autolog`` automation token (``habits.habit:read`` and ``habits.habit:write``),
 so the platform write path (precheck, execution, audit) applies; the database is
 never touched directly. Idempotent: a day that already has a completed log is
-skipped, and the log endpoint is an upsert, so re-running the same week (or an
-overlapping run) never double-logs.
+skipped, and each grant is a conditional write (``?if_absent=true``): a completed log
+that appears after the read, such as a manual one, is left untouched by the API
+itself. Re-running (or overlapping runs) never double-logs.
 
     habits-autogrant [--dry-run] [--days N]
 
@@ -22,6 +23,7 @@ goes to stdout; nothing secret is printed. Exit 0 on success (including zero hab
 """
 
 import argparse
+import http.client
 import json
 import os
 import sys
@@ -37,11 +39,24 @@ DAY_ABBR = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 NOTE = "auto-granted (weekly batch)"
 PAGE = 500
 MAX_DAYS = 31
+DEFAULT_DAYS = 14  # a weekly run covers two weeks, so a day that failed once gets a second chance
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # never forward a token
         return None
+
+
+class RequestError(RuntimeError):
+    """The request could not be built or sent; the message is fixed so no header value can leak."""
+
+    def __init__(self) -> None:
+        super().__init__("request_failed")
+
+
+def bad_value(value: str) -> bool:
+    """True when ``value`` has whitespace or control characters (CR/LF would reach the header)."""
+    return any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value)
 
 
 class ApiError(RuntimeError):
@@ -63,17 +78,19 @@ class Http:
     def call(self, method: str, path: str, body: Any = None, params: dict | None = None) -> Any:
         clean = {k: v for k, v in (params or {}).items() if v is not None}
         query = f"?{urllib.parse.urlencode(clean, doseq=True)}" if clean else ""
-        request = urllib.request.Request(
-            f"{self.base}{path}{query}", method=method,
-            data=json.dumps(body).encode() if body is not None else None,
-            headers={"Authorization": f"Bearer {self.token}", "X-Empire-Channel": "workflow",
-                     "Content-Type": "application/json"})
         try:
+            request = urllib.request.Request(
+                f"{self.base}{path}{query}", method=method,
+                data=json.dumps(body).encode() if body is not None else None,
+                headers={"Authorization": f"Bearer {self.token}", "X-Empire-Channel": "workflow",
+                         "Content-Type": "application/json"})
             with self.opener.open(request, timeout=self.timeout) as response:
                 raw = response.read()
                 return json.loads(raw) if raw else None
         except urllib.error.HTTPError as error:
             raise ApiError(error.code, f"{method} {path}") from None
+        except (ValueError, TypeError, http.client.HTTPException):
+            raise RequestError() from None  # never include the exception text: it can quote the header
 
 
 def pages(http: Http, path: str, params: dict) -> list[dict[str, Any]]:
@@ -114,8 +131,9 @@ def run(http: Http, today: date, days: int, *, dry_run: bool) -> dict[str, Any]:
                 continue
             try:
                 outcome = http.call("PUT", f"/v1/habits/{int(habit['id'])}/logs/{stamp}",
-                                    {"completed": True, "count": 1, "notes": NOTE})["outcome"]
-            except ApiError as exc:  # one failed day never blocks the rest; it is retried next run
+                                    {"completed": True, "count": 1, "notes": NOTE},
+                                    params={"if_absent": "true"})["outcome"]
+            except ApiError as exc:  # one failed day never blocks the rest; it is retried next run (the 14-day window overlaps)
                 counts["errors"] += 1
                 print(json.dumps({"event": "habits.autogrant.log_failed", "habit_id": habit["id"], "date": stamp,
                                   "detail": str(exc)}), file=sys.stderr)
@@ -127,19 +145,27 @@ def run(http: Http, today: date, days: int, *, dry_run: bool) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="habits-autogrant", description=__doc__.splitlines()[0])
     parser.add_argument("--dry-run", action="store_true", help="count what would be granted; write nothing")
-    parser.add_argument("--days", type=int, default=7, help=f"how many past days to cover (1-{MAX_DAYS}, default 7)")
+    parser.add_argument("--days", type=int, default=DEFAULT_DAYS,
+                        help=f"how many past days to cover (1-{MAX_DAYS}, default {DEFAULT_DAYS})")
     args = parser.parse_args(argv)
     if not 1 <= args.days <= MAX_DAYS:
         parser.error(f"--days must be between 1 and {MAX_DAYS}")
     env = os.environ
-    missing = [k for k in ("HABITS_API_URL", "HABITS_AUTOGRANT_TOKEN") if not env.get(k)]
+    url, token = env.get("HABITS_API_URL", "").strip(), env.get("HABITS_AUTOGRANT_TOKEN", "").strip()
+    missing = [k for k, v in (("HABITS_API_URL", url), ("HABITS_AUTOGRANT_TOKEN", token)) if not v]
     if missing:
         print(json.dumps({"event": "habits.autogrant", "error": "missing_config", "missing": missing}))
         return 2
+    if bad_value(url) or bad_value(token):  # fixed message: never echo either value
+        print(json.dumps({"event": "habits.autogrant", "error": "invalid_config"}))
+        return 2
     today = datetime.now(BANGKOK).date()
     try:
-        counts = run(Http(env["HABITS_API_URL"], env["HABITS_AUTOGRANT_TOKEN"]), today, args.days,
+        counts = run(Http(url, token), today, args.days,
                      dry_run=args.dry_run)
+    except RequestError:
+        print(json.dumps({"event": "habits.autogrant", "error": "request_failed"}))
+        return 1
     except (ApiError, OSError, urllib.error.URLError) as exc:
         print(json.dumps({"event": "habits.autogrant", "error": type(exc).__name__, "detail": str(exc)[:200]}))
         return 1

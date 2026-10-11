@@ -655,7 +655,9 @@ def create_app(connect: Callable[[], psycopg.Connection], verifier: TokenVerifie
             return Items(items=[log_out(**row).model_dump(mode="json") for row in rows])
 
         @app.put(f"/v1/{plural}/{{record_id}}/logs/{{log_date}}", response_model=LogResult, name=f"put_{kind.name}_log")
-        def put_log(record_id: int, log_date: date, body: log_model_in, caller: Caller):  # type: ignore[valid-type]
+        def put_log(record_id: int, log_date: date, body: log_model_in, caller: Caller,  # type: ignore[valid-type]
+                    if_absent: Annotated[bool, Query(description="Conditional write: leave an existing completed log"
+                                                     " (any log for kinds without completed) untouched")] = False):
             data = values(kind, body, body.model_fields_set, logs=True)
 
             def op(work: Work) -> Plan:
@@ -670,6 +672,10 @@ def create_app(connect: Callable[[], psycopg.Connection], verifier: TokenVerifie
                         f" VALUES ({', '.join(['%s'] * len(columns))}) RETURNING {kind.log_select}",
                         [caller.workspace, record_id, log_date, *data.values()]).fetchone()
                     outcome = "created"
+                elif if_absent and before.get("completed", True):
+                    # Decided under the record lock and row lock above, so a log written after the caller's
+                    # read is never overwritten.
+                    row, outcome = before, "unchanged"
                 else:
                     diff = changed(kind, before, data, logs=True)
                     row, outcome = before, "unchanged"

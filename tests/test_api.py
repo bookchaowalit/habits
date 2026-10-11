@@ -227,3 +227,31 @@ def test_concurrent_first_logs_of_one_day_both_succeed(client, token, owner):
     with ThreadPoolExecutor(max_workers=2) as pool:
         codes = list(pool.map(lambda _: client.put(path, headers=headers, json={}).status_code, range(2)))
     assert codes == [200, 200]
+
+
+def test_if_absent_never_overwrites_an_existing_completed_log(client, token, owner):
+    headers = token(*owner)
+    path = f"/v1/habits/{create_habit(client, headers)['id']}/logs"
+    grant = {"completed": True, "count": 1, "notes": "auto-granted (weekly batch)"}
+    conditional = {"if_absent": "true"}
+    # No log yet: the conditional write creates it.
+    assert client.put(f"{path}/2026-10-09", headers=headers, json=grant, params=conditional).json()["outcome"] == "created"
+    # A manual completed log written after the cron's read is left alone (count and notes kept).
+    client.put(f"{path}/2026-10-10", headers=headers, json={"completed": True, "count": 4, "notes": "manual"})
+    kept = client.put(f"{path}/2026-10-10", headers=headers, json=grant, params=conditional).json()
+    assert kept["outcome"] == "unchanged" and (kept["log"]["count"], kept["log"]["notes"]) == (4, "manual")
+    # An existing log that is not completed is still upgraded by the conditional write.
+    client.put(f"{path}/2026-10-08", headers=headers, json={"completed": False, "count": 0})
+    assert client.put(f"{path}/2026-10-08", headers=headers, json=grant, params=conditional).json()["outcome"] == "updated"
+    # The default PUT still upserts over a completed log.
+    overwritten = client.put(f"{path}/2026-10-10", headers=headers, json=grant).json()
+    assert overwritten["outcome"] == "updated" and overwritten["log"]["count"] == 1
+
+
+def test_if_absent_on_routine_logs_keeps_any_existing_log(client, token, owner):
+    headers = token(*owner)
+    routine = client.post("/v1/routines", json={"name": "Morning", "slug": slug()}, headers=headers).json()
+    path = f"/v1/routines/{routine['id']}/logs/2026-10-10"
+    client.put(path, headers=headers, json={"notes": "mine"})
+    kept = client.put(path, headers=headers, json={"notes": "other"}, params={"if_absent": "true"}).json()
+    assert kept["outcome"] == "unchanged" and kept["log"]["notes"] == "mine"

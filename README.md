@@ -37,19 +37,22 @@ HTTP with the caller's own token (same pattern as
 | POST | `/v1/habits` · `/v1/routines` | create (`Idempotency-Key` supported) |
 | PATCH / DELETE | `/v1/{habits,routines}/{id}` | change (`expected_version`) / delete |
 | GET | `/v1/habit-logs` · `/v1/routine-logs` | logs (`habit_id`/`routine_id`, `from`, `to`, `completed`, `notes_prefix`, `order`) |
-| PUT / DELETE | `/v1/{habits,routines}/{id}/logs/{date}` | log a day (upsert) / remove it |
+| PUT / DELETE | `/v1/{habits,routines}/{id}/logs/{date}` | log a day (upsert; `?if_absent=true` keeps an existing completed log) / remove it |
 
 ## Weekly auto-grant
 
 `habits-autogrant [--dry-run] [--days N]` (`src/solo_habits/autogrant.py`) replaces the
 retired local `weekly_habit_autogranted` job. For each active habit and each of the
-last N days (default 7, ending yesterday in Asia/Bangkok) on one of its
+last N days (default 14, ending yesterday in Asia/Bangkok) on one of its
 `schedule_days` (every day when unset) without a completed log, it logs the day
 (`completed: true, count: 1`, note `auto-granted (weekly batch)`). It calls this
 cell's own HTTP API as the `habit-autolog` automation (`habits.habit:read|write`),
 never the database, so execution and audit records apply, and streaks are
-recomputed by the service. Idempotent: days with a completed log are skipped and the
-log endpoint is an upsert, so re-running a week never double-logs. Zero habits is a
+recomputed by the service. The 14-day window overlaps the previous weekly runs, so a day that failed once is
+retried the next week. Idempotent: days with a completed log are skipped, and each
+grant is a conditional write (`PUT .../logs/{date}?if_absent=true`) that leaves a
+completed log written meanwhile (for example a manual one) untouched, so re-running
+never double-logs or overwrites. Zero habits is a
 successful no-op. Prints one JSON line per run; exit 1 if the API fails or a day
 could not be logged (retried next run), 2 on missing configuration. Variables
 (Railway only): `HABITS_API_URL` (the `habits-api` public https URL),
