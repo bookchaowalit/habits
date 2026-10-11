@@ -18,6 +18,7 @@ dev = ["pytest>=8", "pgserver>=0.1.4"]
 habits-api = "solo_habits.app:main"
 habits-publish = "solo_habits.publisher:main"
 habits-db = "solo_habits.db:main"
+habits-autogrant = "solo_habits.autogrant:main"
 
 [build-system]
 requires = ["setuptools>=69"]
