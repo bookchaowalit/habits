@@ -1,0 +1,8 @@
+system_id: bookchaowalit/private/solo-habits
+prefix: CARD
+brand: "SOLO HABITS"
+subtitle: "Cell ของ habit/routine และ daily log พร้อม streak ที่ service คำนวณเอง"
+footer: "solo-habits — Product Card"
+color: "#52b788"
+audience: internal
+tier: L0
