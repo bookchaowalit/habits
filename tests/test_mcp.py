@@ -78,7 +78,7 @@ def test_unknown_arguments_are_rejected_before_any_http_call():
     fake = Fake()
     srv = server(fake)
     for name in sorted(READS | WRITES):
-        with pytest.raises(Exception, match="invalid_arguments: surprise"):
+        with pytest.raises(Exception, match="invalid_arguments"):
             call(srv, name, {**ARGS.get(name, {}), "surprise": 1})
     assert fake.requests == []
 
@@ -199,3 +199,33 @@ def test_automation_name_is_validated_and_tokens_are_cleaned(tmp_path):
     token_file.chmod(0o600)
     with pytest.raises(mod.ConfigError):
         mod.bearer({"EMPIRE_TOKEN_FILE": str(token_file)})
+
+
+def _chain(exc: BaseException):
+    seen = []
+    while exc is not None and exc not in seen:
+        seen.append(exc)
+        yield exc
+        exc = exc.__cause__ or exc.__context__
+
+
+def test_validation_errors_are_fixed_and_name_no_argument_or_value():
+    srv = server(Fake())
+    rejected = {}
+    for name in sorted(READS | WRITES):
+        tool = next(t for t in asyncio.run(srv.list_tools()) if t.name == name)
+        attempts = [{"UNTRUSTED_MARKER": "VALUE_MARKER"}, {**ARGS.get(name, {}), "UNTRUSTED_MARKER": 1}]
+        attempts += [{**ARGS.get(name, {}), field: {"k": "VALUE_MARKER"}} for field in tool.input_schema["properties"]]
+        for args in attempts:
+            try:
+                call(srv, name, args)
+            except Exception as exc:  # noqa: BLE001
+                rejected[name] = rejected.get(name, 0) + 1
+                assert str(exc).endswith("invalid_arguments") and "MARKER" not in str(exc)
+                assert exc.__cause__ is None and exc.__context__ is None
+                for link in _chain(exc):
+                    assert "MARKER" not in str(link) and "MARKER" not in repr(link)
+    assert set(rejected) == READS | WRITES
+    with pytest.raises(Exception) as caught:
+        call(srv, "x.UNTRUSTED_MARKER", {"a": "VALUE_MARKER"})
+    assert "MARKER" not in str(caught.value) + repr(caught.value)

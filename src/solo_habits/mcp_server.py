@@ -122,12 +122,14 @@ class StrictMCPServer(MCPServer):
     async def call_tool(self, name: str, arguments: dict[str, Any], context: Any = None):  # type: ignore[override]
         model = self.argument_models.get(name)
         if model is None:
-            raise ToolFailed(f"unknown tool {name}")
+            raise ToolFailed("unknown_tool")
         try:
             model.model_validate(arguments or {})
-        except ValidationError as exc:
-            fields = sorted({str(error["loc"][0]) for error in exc.errors() if error["loc"]})
-            raise ToolFailed(f"invalid_arguments: {', '.join(fields)}") from exc
+            valid = True
+        except ValidationError:
+            valid = False  # raised below, outside the handler: no cause or context keeps the rejected input
+        if not valid:
+            raise ToolFailed("invalid_arguments") from None  # never names the argument or echoes its value
         return await super().call_tool(name, arguments, context)
 
 
