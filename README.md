@@ -1,10 +1,10 @@
-# solo-habits
+# habits
 
 The habits cell: habits and routines and their daily logs. It keeps its own
 Neon database and reuses [empire-platform](https://github.com/bookchaowalit/empire-platform)
 for identity, authorization, execution and audit records, and the graph, over
 HTTP with the caller's own token (same pattern as
-[solo-decisions](https://github.com/bookchaowalit/solo-decisions)).
+[decisions](https://github.com/bookchaowalit/decisions)).
 
 | | |
 |---|---|
