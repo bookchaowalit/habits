@@ -34,7 +34,7 @@ def test_streaks_projects_only_streak_fields():
 
 
 IDENTITY = {"actor": "x", "workspace_id": "w", "workspace": "w", "tenant_id": "t", "delegation": "d", "token": "t",
-            "authorization": "Bearer x", "sub": "s"}
+            "authorization": "Bearer x", "sub": "s", "actor_id": "a", "tenant": "t", "owner_id": "o"}
 
 
 class Fake:
@@ -117,11 +117,41 @@ def test_sample_calls_map_to_the_api():
         assert dict(request.url.params) == params, name
 
 
-def test_errors_carry_only_the_status_and_a_short_code():
-    fake = Fake(status=403, body={"detail": {"error": "forbidden", "secret": "tok-123 do-not-leak"}})
+@pytest.mark.parametrize("status,message", [(400, "400: invalid"), (401, "401: unauthorized"), (403, "403: forbidden"),
+                                             (404, "404: not_found"), (409, "409: conflict"), (422, "422: invalid"),
+                                             (429, "429: rate_limited"), (500, "500: upstream_error"),
+                                             (503, "503: upstream_error"), (418, "418: error")])
+def test_errors_are_a_fixed_message_from_the_status_only(status, message):
+    secret = {"detail": {"error": "forbidden", "reason": "leak-reason", "secret": "tok-123 do-not-leak"},
+              "error": {"code": "leak-code", "message": "do-not-leak"}}
+    name = sorted(READS)[0]
     with pytest.raises(Exception) as caught:
-        call(server(fake), sorted(READS)[0], ARGS.get(sorted(READS)[0], {}))
-    assert str(caught.value).endswith("403: forbidden") and "do-not-leak" not in str(caught.value)
+        call(server(Fake(status=status, body=secret)), name, ARGS.get(name, {}))
+    assert str(caught.value).endswith(": " + message)
+    assert "leak" not in str(caught.value) and "tok-123" not in str(caught.value)
+
+
+def test_token_with_whitespace_or_control_characters_is_refused_without_echo():
+    name = sorted(READS)[0]
+    for bad in ("two words-abcdefgh", "line\nbreak-abcdefgh", "tab\there-abcdefgh", "nul\x00byte-abcdefgh", "   "):
+        fake = Fake()
+        srv = build_server(fake.client(), lambda bad=bad: bad).server
+        with pytest.raises(Exception) as caught:
+            call(srv, name, ARGS.get(name, {}))
+        assert str(caught.value).endswith("401: unauthorized") and "abcdefgh" not in str(caught.value)
+        assert fake.requests == []
+
+
+def test_no_tool_exposes_a_forbidden_argument_name():
+    forbidden = {"actor", "actor_id", "workspace", "workspace_id", "tenant", "tenant_id", "delegation", "token",
+                 "authorization", "owner_id"}
+    assert forbidden == set(mod.FORBIDDEN_ARGUMENTS)
+    for tool in asyncio.run(server(Fake()).list_tools()):
+        assert not forbidden & set(tool.input_schema["properties"]), tool.name
+    with pytest.raises(ValueError):
+        class Bad(mod.Strict):
+            actor: str = "x"
+        mod.Toolbox("x", "x", Fake().client(), lambda: "t").tool("x.bad", Bad, "bad")(lambda a: a)
 
 
 def test_transport_failure_does_not_echo_the_error():
@@ -137,8 +167,9 @@ def test_transport_failure_does_not_echo_the_error():
 def test_url_must_be_https_or_loopback(tmp_path):
     assert mod.api_url(API_KEY, {API_KEY: "https://x.example"}) == "https://x.example"
     assert mod.api_url(API_KEY, {API_KEY: "http://127.0.0.1:9"}) == "http://127.0.0.1:9"
-    with pytest.raises(mod.ConfigError):
-        mod.api_url(API_KEY, {API_KEY: "http://example.com"})
+    for bad in ("http://example.com", "https://u:p@x.example", "https://x.example?a=1", "https://x.example#f"):
+        with pytest.raises(mod.ConfigError):
+            mod.api_url(API_KEY, {API_KEY: bad})
     with pytest.raises(mod.ConfigError):
         mod.api_url(API_KEY, {"EMPIRE_CLIENT_CONFIG": str(tmp_path / "none")})
 
@@ -153,3 +184,18 @@ def test_token_order_and_file_mode(tmp_path):
     assert mod.bearer({"EMPIRE_TOKEN_FILE": str(token_file)}) == "from-file"
     assert mod.bearer({"EMPIRE_TOKEN": "env", "EMPIRE_TOKEN_FILE": str(token_file)}) == "env"
     assert mod.bearer({"EMPIRE_MCP_AUTOMATION": "x-y", "EMPIRE_AUTOMATION_TOKEN_X_Y": "auto"}) == "auto"
+
+
+def test_automation_name_is_validated_and_tokens_are_cleaned(tmp_path):
+    for bad in ("../x", "Owner", "a/b", "-x", ""):
+        if bad:
+            with pytest.raises(mod.ConfigError):
+                mod.bearer({"EMPIRE_MCP_AUTOMATION": bad})
+    with pytest.raises(mod.ConfigError) as caught:
+        mod.bearer({"EMPIRE_TOKEN": "has space-secret"})
+    assert "secret" not in str(caught.value)
+    token_file = tmp_path / "t.jwt"
+    token_file.write_text("two words\n")
+    token_file.chmod(0o600)
+    with pytest.raises(mod.ConfigError):
+        mod.bearer({"EMPIRE_TOKEN_FILE": str(token_file)})

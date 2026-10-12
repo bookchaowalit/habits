@@ -33,7 +33,6 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
-CODE = re.compile(r"^[a-z0-9_.:-]{1,60}$")
 
 
 class Strict(BaseModel):
@@ -41,7 +40,7 @@ class Strict(BaseModel):
 
 
 class ToolFailed(ToolError):
-    """Reaches the MCP client as a tool error carrying only the status and a short API error code."""
+    """Reaches the MCP client as a tool error carrying only a fixed message mapped from the HTTP status."""
 
 
 class ConfigError(RuntimeError):
@@ -76,9 +75,25 @@ def api_url(key: str, environ: Any = None) -> str:
         raise ConfigError(f"the API is not configured: set {key} (env or client.env)")
     parts = urllib.parse.urlsplit(value)
     host = (parts.hostname or "").lower()
+    if parts.username is not None or parts.password is not None or parts.query or parts.fragment or "?" in value or "#" in value:
+        raise ConfigError(f"{key} must not carry credentials, a query or a fragment")
     if not (parts.scheme == "https" and host) and not (parts.scheme == "http" and host in LOOPBACK):
         raise ConfigError(f"{key} must be https (http only for 127.0.0.1, ::1 or localhost)")
     return value
+
+
+def clean_token(value: str) -> str:
+    """The token without surrounding whitespace; any inner whitespace or control character is refused."""
+    token = value.strip()
+    if not token or any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in token):
+        raise ConfigError("the token has an unexpected format") from None  # never echo it
+    return token
+
+
+AUTOMATION = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+FORBIDDEN_ARGUMENTS = frozenset({"actor", "actor_id", "workspace", "workspace_id", "tenant", "tenant_id", "delegation",
+                                 "token", "authorization", "owner_id"})
+IDEMPOTENCY_KEY = r"^[A-Za-z0-9._:-]{8,128}$"
 
 
 def read_owner_file(path: Path, what: str) -> str:
@@ -116,16 +131,13 @@ class StrictMCPServer(MCPServer):
         return await super().call_tool(name, arguments, context)
 
 
-def _error_code(response: httpx.Response) -> str:
-    try:
-        body = response.json()
-    except ValueError:
-        return "error"
-    if not isinstance(body, dict):
-        return "error"
-    err = body.get("detail") if isinstance(body.get("detail"), dict) else body.get("error")
-    code = (err.get("reason") or err.get("error") or err.get("code")) if isinstance(err, dict) else err
-    return code if isinstance(code, str) and CODE.fullmatch(code) else "error"
+REASONS = {400: "invalid", 401: "unauthorized", 403: "forbidden", 404: "not_found", 405: "invalid", 409: "conflict",
+           410: "not_found", 413: "invalid", 422: "invalid", 429: "rate_limited"}
+
+
+def failure(status: int) -> str:
+    """A fixed message from the status alone: upstream text and detail fields are never included."""
+    return f"{status}: {'upstream_error' if status >= 500 else REASONS.get(status, 'error')}"
 
 
 class Toolbox:
@@ -137,22 +149,29 @@ class Toolbox:
         self.client, self.token, self.read_only, self.empire_headers = client, token, read_only, empire_headers
 
     def call(self, method: str, path: str, *, params: dict[str, Any] | None = None, body: Any = None,
-             idempotent: bool = False) -> Any:
-        headers = {"Authorization": f"Bearer {self.token()}"}
+             idempotency_key: str | None = None) -> Any:
+        try:
+            bearer = clean_token(self.token())
+        except ConfigError:
+            raise ToolFailed("401: unauthorized") from None  # no token, or one with an unexpected format
+        headers = {"Authorization": f"Bearer {bearer}"}
         if self.empire_headers:
             headers |= {"X-Empire-Channel": "mcp", "X-Correlation-Id": f"mcp-{uuid.uuid4().hex}"}
-        if idempotent:
-            headers["Idempotency-Key"] = f"mcp-{uuid.uuid4().hex}"
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
         try:
             response = self.client.request(method, path, headers=headers, params=params, json=body)
         except httpx.HTTPError:
             raise ToolFailed("503: unavailable") from None  # never echo the transport error
         if response.status_code >= 400:
-            raise ToolFailed(f"{response.status_code}: {_error_code(response)}")
+            raise ToolFailed(failure(response.status_code))
         return response.json() if response.content else {"ok": True}
 
     def tool(self, name: str, model: type[Strict], description: str, *, write: bool = False):
         def register(handler: Callable[[Any], Any]) -> Callable[[Any], Any]:
+            banned = FORBIDDEN_ARGUMENTS & set(model.model_fields)
+            if banned:
+                raise ValueError(f"{name}: identity arguments are not allowed: {sorted(banned)}")
             if write and self.read_only:
                 return handler
 
@@ -175,6 +194,10 @@ def query(args: BaseModel, rename: dict[str, str] | None = None, drop: tuple[str
     """The set arguments as query parameters (``rename`` maps argument names to the API's names)."""
     values = args.model_dump(mode="json", exclude_none=True, exclude=set(drop))
     return {(rename or {}).get(key, key): value for key, value in values.items()}
+
+
+def new_key() -> str:
+    return f"mcp-{uuid.uuid4().hex}"
 
 
 class Id(Strict):
@@ -320,16 +343,18 @@ def bearer(environ: Any = None) -> str:
     """The caller's own token: EMPIRE_TOKEN, EMPIRE_TOKEN_FILE, else the named automation token."""
     environ = os.environ if environ is None else environ
     if environ.get("EMPIRE_TOKEN"):
-        return environ["EMPIRE_TOKEN"].strip()
+        return clean_token(environ["EMPIRE_TOKEN"])
     if environ.get("EMPIRE_TOKEN_FILE"):
-        return read_owner_file(Path(environ["EMPIRE_TOKEN_FILE"]).expanduser(), "token")
+        return clean_token(read_owner_file(Path(environ["EMPIRE_TOKEN_FILE"]).expanduser(), "token"))
     name = environ.get("EMPIRE_MCP_AUTOMATION") or "owner-cli"
+    if not AUTOMATION.fullmatch(name):
+        raise ConfigError("EMPIRE_MCP_AUTOMATION must match ^[a-z0-9][a-z0-9-]{0,62}$")
     key = "EMPIRE_AUTOMATION_TOKEN_" + name.upper().replace("-", "_")
     if environ.get(key):
-        return environ[key].strip()
+        return clean_token(environ[key])
     path = Path.home() / ".config" / "empire-platform" / "tokens" / f"{name}.jwt"
     if path.is_file():
-        return read_owner_file(path, "token")
+        return clean_token(read_owner_file(path, "token"))
     raise ConfigError(f"no token: set EMPIRE_TOKEN, EMPIRE_TOKEN_FILE or {key}")
 
 
