@@ -9,7 +9,7 @@ Configuration (same conventions as solo-cell-kit ``cellkit.mcp``)::
     EMPIRE_HABITS_API=https://...   env, else the owner-only ~/.config/empire-platform/client.env
     EMPIRE_TOKEN=...                bearer, else
     EMPIRE_TOKEN_FILE=/path/x.jwt   a token file (mode 600), else the automation token
-    EMPIRE_MCP_AUTOMATION=owner-cli EMPIRE_AUTOMATION_TOKEN_<NAME> or ~/.config/empire-platform/tokens/<name>.jwt
+    EMPIRE_MCP_AUTOMATION=owner-mcp EMPIRE_AUTOMATION_TOKEN_<NAME> or ~/.config/empire-platform/tokens/<name>.jwt
     EMPIRE_MCP_READONLY=1           register only the read tools
 
     habits-mcp                        stdio server (see .mcp.json)
@@ -346,7 +346,7 @@ def bearer(environ: Any = None) -> str:
         return clean_token(environ["EMPIRE_TOKEN"])
     if environ.get("EMPIRE_TOKEN_FILE"):
         return clean_token(read_owner_file(Path(environ["EMPIRE_TOKEN_FILE"]).expanduser(), "token"))
-    name = environ.get("EMPIRE_MCP_AUTOMATION") or "owner-cli"
+    name = environ.get("EMPIRE_MCP_AUTOMATION") or "owner-mcp"
     if not AUTOMATION.fullmatch(name):
         raise ConfigError("EMPIRE_MCP_AUTOMATION must match ^[a-z0-9][a-z0-9-]{0,62}$")
     key = "EMPIRE_AUTOMATION_TOKEN_" + name.upper().replace("-", "_")
