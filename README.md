@@ -60,6 +60,22 @@ could not be logged (retried next run), 2 on missing configuration. Variables
 cell tokens). Deploy: `railway up --ci --service habits-autogrant`; check:
 `railway run --service habits-autogrant -- habits-autogrant --dry-run`.
 
+## MCP server (`habits-mcp`)
+
+`solo_habits.mcp_server` is this cell's MCP server (stdio). Every tool calls the cell's HTTP API with the caller's own
+token, so MCP has exactly the authorization the API has: it never touches the database, and no tool accepts
+an actor, workspace, delegation or token argument (strict models reject unknown arguments before any HTTP
+call). Errors reach the client as the status code plus the API's short error code only.
+
+- Tools: `habits.habit.{list,get,streaks,stats,logs}`, `habits.routine.{list,get,stats,logs}`.
+- Write tools: `habits.habit.log` and `habits.routine.log` (log or correct one day; `if_absent` keeps an existing completed log). Set `EMPIRE_MCP_READONLY=1` to register only the read tools.
+- URL: `EMPIRE_HABITS_API` (env, else the owner-only `~/.config/empire-platform/client.env`); https only, http only on loopback.
+- Token, first match wins: `EMPIRE_TOKEN`, `EMPIRE_TOKEN_FILE` (mode 600), then the automation token named by
+  `EMPIRE_MCP_AUTOMATION` (default `owner-cli`) from `EMPIRE_AUTOMATION_TOKEN_<NAME>` or
+  `~/.config/empire-platform/tokens/<name>.jwt`.
+- Run: `uv pip install --python .venv/bin/python -e ".[mcp]"`, then `.venv/bin/habits-mcp` (see `.mcp.json`).
+- Tests: `.venv/bin/pytest tests/test_mcp.py` (fake HTTP transport; no database, no network).
+
 ## Develop and operate
 
 ```bash

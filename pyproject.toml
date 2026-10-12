@@ -12,13 +12,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pgserver>=0.1.4"]
+dev = ["pytest>=8", "pgserver>=0.1.4", "mcp>=2.3,<3"]
+mcp = ["mcp>=2.3,<3"]  # habits-mcp (solo_habits.mcp_server); not needed by the API image
 
 [project.scripts]
 habits-api = "solo_habits.app:main"
 habits-publish = "solo_habits.publisher:main"
 habits-db = "solo_habits.db:main"
 habits-autogrant = "solo_habits.autogrant:main"
+habits-mcp = "solo_habits.mcp_server:main"
 
 [build-system]
 requires = ["setuptools>=69"]

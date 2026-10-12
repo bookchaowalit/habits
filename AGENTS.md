@@ -11,3 +11,4 @@
   authorized read afterwards.
 - Keep the solo-empire registry entry (`habits` in
   `repository-catalog/registries/online-systems.yaml`) in sync.
+- `habits-mcp` (mcp_server.py in the package) is this cell's MCP server: HTTP API only, caller's own token, no identity arguments; keep tools in step with the API routes and run `tests/test_mcp.py`.

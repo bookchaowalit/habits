@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "habits": {
+      "command": ".venv/bin/habits-mcp",
+      "args": []
+    }
+  }
+}
