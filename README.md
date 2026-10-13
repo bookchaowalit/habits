@@ -1,9 +1,9 @@
 # life-habits-api
 The habits cell: habits and routines and their daily logs. It keeps its own
-Neon database and reuses [empire-platform](https://github.com/bookchaowalit/empire-platform)
+Neon database and reuses [empire-platform](https://github.com/bookchaowalit/platform-empire)
 for identity, authorization, execution and audit records, and the graph, over
 HTTP with the caller's own token (same pattern as
-[decisions](https://github.com/bookchaowalit/decisions)).
+[decisions](https://github.com/bookchaowalit/life-decisions-api)).
 
 | | |
 |---|---|
@@ -79,7 +79,7 @@ call). Errors reach the client as a fixed message from the HTTP status only (for
 
 ```bash
 uv venv .venv && uv pip install --python .venv/bin/python -e ".[dev]"
-.venv/bin/pytest -q          # add ../empire-platform[dev] for the end-to-end test
+.venv/bin/pytest -q          # add ../platform-empire[dev] for the end-to-end test
 NEON_API_KEY=... .venv/bin/habits-db provision
 npm install && railway config apply && railway up --ci --service habits-api
 ```
