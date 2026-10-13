@@ -1,7 +1,7 @@
 """End to end with the real empire-platform (its own throwaway database, in-process HTTP).
 
 Skipped unless empire-platform is installed in the environment (a sibling
-checkout: ``uv pip install -e ../empire-platform[dev]``). Proves the contract:
+checkout: ``uv pip install -e ../platform-empire[dev]``). Proves the contract:
 real PDP decisions, executions bound to the operation, audit rows, and graph
 ingest of the outbox through the publisher's delegated token.
 """

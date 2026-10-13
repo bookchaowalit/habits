@@ -79,7 +79,7 @@ call). Errors reach the client as a fixed message from the HTTP status only (for
 
 ```bash
 uv venv .venv && uv pip install --python .venv/bin/python -e ".[dev]"
-.venv/bin/pytest -q          # add ../empire-platform[dev] for the end-to-end test
+.venv/bin/pytest -q          # add ../platform-empire[dev] for the end-to-end test
 NEON_API_KEY=... .venv/bin/habits-db provision
 npm install && railway config apply && railway up --ci --service habits-api
 ```
