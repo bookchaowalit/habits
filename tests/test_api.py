@@ -3,8 +3,8 @@
 import uuid
 
 import pytest
-
 from conftest import OWNER_ACTIONS
+
 from solo_habits.platform import PlatformUnavailable
 from solo_habits.publisher import publish_pending
 
@@ -399,11 +399,11 @@ def test_streak_read_is_as_of_today(client, token, owner, cluster):
         )
     seen = client.get(f"/v1/habits/{habit['id']}", headers=headers).json()
     assert (seen["current_streak"], seen["best_streak"]) == (0, 4)
-    listed = [
+    listed = next(
         h
         for h in client.get("/v1/habits", headers=headers).json()["items"]
         if h["id"] == habit["id"]
-    ][0]
+    )
     assert listed["current_streak"] == 0
 
 

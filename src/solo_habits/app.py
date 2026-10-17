@@ -33,6 +33,8 @@ from fastapi import (
     Header,
     HTTPException,
     Query,
+)
+from fastapi import (
     Request as HttpRequest,
 )
 from psycopg.rows import dict_row
@@ -604,7 +606,7 @@ def create_app(
             try:
                 with bound(caller) as conn:
                     publish_pending(conn, platform, token, limit=20)
-            except Exception as exc:  # the cron sweep retries
+            except Exception as exc:  # noqa: BLE001 - the cron sweep retries; never fail the request for this
                 log.warning(
                     json.dumps(
                         {

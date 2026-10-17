@@ -151,7 +151,7 @@ class HostedCluster:
     urls: dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def from_env(cls, secrets_file: Path = SECRETS) -> "HostedCluster":
+    def from_env(cls, secrets_file: Path = SECRETS) -> HostedCluster:
         urls: dict[str, str] = {}
         if secrets_file.is_file():
             if secrets_file.stat().st_mode & 0o077:
