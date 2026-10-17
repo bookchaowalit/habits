@@ -46,10 +46,20 @@ class TokenVerifier:
             raise Unauthenticated("missing bearer token")
         token = authorization.removeprefix("Bearer ")
         try:
-            claims = jwt.decode(token, self.public_key_pem, algorithms=["RS256"], audience=self.audience,
-                                issuer=self.issuer, options={"require": ["exp", "iat", "sub", "jti"]})
+            claims = jwt.decode(
+                token,
+                self.public_key_pem,
+                algorithms=["RS256"],
+                audience=self.audience,
+                issuer=self.issuer,
+                options={"require": ["exp", "iat", "sub", "jti"]},
+            )
             lifetime = claims["exp"] - claims["iat"]
-            limit = self.max_lifetime if claims.get("del") else min(self.max_lifetime, MAX_LIFETIME_SECONDS)
+            limit = (
+                self.max_lifetime
+                if claims.get("del")
+                else min(self.max_lifetime, MAX_LIFETIME_SECONDS)
+            )
             if lifetime > limit:
                 raise Unauthenticated("token lifetime too long")
             actor = uuid.UUID(claims["sub"])
@@ -62,4 +72,10 @@ class TokenVerifier:
         channel = channel or "api"
         if channel not in CHANNELS:
             raise Unauthenticated("unknown channel")
-        return Principal(actor=actor, workspace=workspace, delegation=delegation, channel=channel, token=token)
+        return Principal(
+            actor=actor,
+            workspace=workspace,
+            delegation=delegation,
+            channel=channel,
+            token=token,
+        )

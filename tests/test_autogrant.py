@@ -13,7 +13,12 @@ TODAY = date(2026, 10, 11)  # a Sunday; the window is Sun 10-04 .. Sat 10-10
 
 class FakeHttp:
     def __init__(self, habits, logs=(), fail_dates=()):
-        self.habits, self.logs, self.fail_dates, self.puts = habits, list(logs), set(fail_dates), []
+        self.habits, self.logs, self.fail_dates, self.puts = (
+            habits,
+            list(logs),
+            set(fail_dates),
+            [],
+        )
 
     def call(self, method, path, body=None, params=None):
         if method == "GET" and path == "/v1/habits":
@@ -24,7 +29,9 @@ class FakeHttp:
             return {"items": self.logs}
         assert method == "PUT"
         stamp = path.rsplit("/", 1)[1]
-        assert params == {"if_absent": "true"}  # the grant never overwrites a log written since the read
+        assert params == {
+            "if_absent": "true"
+        }  # the grant never overwrites a log written since the read
         if stamp in self.fail_dates:
             raise ApiError(500, "PUT x")
         key = (int(path.split("/")[3]), stamp)
@@ -41,15 +48,25 @@ def habit(i, days=None):
 
 def test_zero_habits_is_a_clean_noop():
     http = FakeHttp([])
-    assert run(http, TODAY, 7, dry_run=False) == {"habits": 0, "granted": 0, "skipped": 0, "errors": 0}
+    assert run(http, TODAY, 7, dry_run=False) == {
+        "habits": 0,
+        "granted": 0,
+        "skipped": 0,
+        "errors": 0,
+    }
     assert http.puts == []
 
 
 def test_grants_every_scheduled_missing_day_with_note():
     http = FakeHttp([habit(1), habit(2, ["mon", "fri"])])
     counts = run(http, TODAY, 7, dry_run=False)
-    assert counts["granted"] == 9 and counts["skipped"] == 0  # 7 + (Mon 10-05, Fri 10-09)
-    assert ((2, "2026-10-05"), {"completed": True, "count": 1, "notes": autogrant.NOTE}) in http.puts
+    assert (
+        counts["granted"] == 9 and counts["skipped"] == 0
+    )  # 7 + (Mon 10-05, Fri 10-09)
+    assert (
+        (2, "2026-10-05"),
+        {"completed": True, "count": 1, "notes": autogrant.NOTE},
+    ) in http.puts
     assert not any(k == (2, "2026-10-06") for k, _ in http.puts)
 
 
@@ -65,7 +82,9 @@ def test_rerun_same_week_never_double_logs():
     run(http, TODAY, 7, dry_run=False)
     first = len(http.puts)
     second = run(http, TODAY, 7, dry_run=False)
-    assert len(http.puts) == first and second["granted"] == 0 and second["skipped"] == 14
+    assert (
+        len(http.puts) == first and second["granted"] == 0 and second["skipped"] == 14
+    )
 
 
 def test_dry_run_writes_nothing():
@@ -84,14 +103,21 @@ def test_main_exit_codes_and_no_token_in_output(monkeypatch, capsys):
     monkeypatch.delenv("HABITS_API_URL", raising=False)
     monkeypatch.delenv("HABITS_AUTOGRANT_TOKEN", raising=False)
     assert autogrant.main([]) == 2
-    assert json.loads(capsys.readouterr().out)["missing"] == ["HABITS_API_URL", "HABITS_AUTOGRANT_TOKEN"]
+    assert json.loads(capsys.readouterr().out)["missing"] == [
+        "HABITS_API_URL",
+        "HABITS_AUTOGRANT_TOKEN",
+    ]
 
     monkeypatch.setenv("HABITS_API_URL", "https://habits.example")
     monkeypatch.setenv("HABITS_AUTOGRANT_TOKEN", "sekrit-token")
     monkeypatch.setattr(autogrant, "Http", lambda base, token: FakeHttp([]))
     assert autogrant.main(["--dry-run"]) == 0
     line = json.loads(capsys.readouterr().out)
-    assert line["event"] == "habits.autogrant" and line["habits"] == 0 and line["dry_run"] is True
+    assert (
+        line["event"] == "habits.autogrant"
+        and line["habits"] == 0
+        and line["dry_run"] is True
+    )
 
     down = FakeHttp([])
     down.call = lambda *a, **k: (_ for _ in ()).throw(ApiError(503, "GET /v1/habits"))
@@ -140,24 +166,36 @@ def test_day_failed_last_week_is_retried_in_the_next_window():
     assert run(failing, last_week, 14, dry_run=False)["errors"] == 1
     retry = FakeHttp([habit(1)], failing.logs)
     counts = run(retry, TODAY, 14, dry_run=False)
-    assert ((1, "2026-09-30"), {"completed": True, "count": 1, "notes": autogrant.NOTE}) in retry.puts
+    assert (
+        (1, "2026-09-30"),
+        {"completed": True, "count": 1, "notes": autogrant.NOTE},
+    ) in retry.puts
     assert counts["errors"] == 0
 
 
-@pytest.mark.parametrize("token", ["zzsecret\nX-Evil: 1", "zzsecret\r\nabc", "zz secret"])
+@pytest.mark.parametrize(
+    "token", ["zzsecret\nX-Evil: 1", "zzsecret\r\nabc", "zz secret"]
+)
 def test_bad_token_never_appears_in_output(monkeypatch, capsys, token):
     monkeypatch.setenv("HABITS_API_URL", "https://habits.example")
     monkeypatch.setenv("HABITS_AUTOGRANT_TOKEN", token)
     assert autogrant.main([]) == 2
     out = capsys.readouterr()
-    assert "zz" not in out.out + out.err and json.loads(out.out)["error"] == "invalid_config"
+    assert (
+        "zz" not in out.out + out.err
+        and json.loads(out.out)["error"] == "invalid_config"
+    )
 
 
 def test_surrounding_whitespace_is_stripped(monkeypatch):
     seen = {}
     monkeypatch.setenv("HABITS_API_URL", " https://habits.example\n")
     monkeypatch.setenv("HABITS_AUTOGRANT_TOKEN", "  tok\n")
-    monkeypatch.setattr(autogrant, "Http", lambda base, token: seen.update(base=base, token=token) or FakeHttp([]))
+    monkeypatch.setattr(
+        autogrant,
+        "Http",
+        lambda base, token: seen.update(base=base, token=token) or FakeHttp([]),
+    )
     assert autogrant.main(["--dry-run"]) == 0
     assert seen == {"base": "https://habits.example", "token": "tok"}
 
@@ -170,7 +208,9 @@ def test_request_build_failure_leaks_nothing(monkeypatch, capsys):
     monkeypatch.setenv("HABITS_API_URL", "https://habits.example")
     monkeypatch.setenv("HABITS_AUTOGRANT_TOKEN", "tok")
     real = autogrant.Http
-    monkeypatch.setattr(autogrant, "Http", lambda base, token: real(base, "tok\nsecret-part"))
+    monkeypatch.setattr(
+        autogrant, "Http", lambda base, token: real(base, "tok\nsecret-part")
+    )
     assert autogrant.main([]) == 1
     out = capsys.readouterr()
     assert "secret-part" not in out.out + out.err and "request_failed" in out.out

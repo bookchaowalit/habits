@@ -39,11 +39,15 @@ DAY_ABBR = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 NOTE = "auto-granted (weekly batch)"
 PAGE = 500
 MAX_DAYS = 31
-DEFAULT_DAYS = 14  # a weekly run covers two weeks, so a day that failed once gets a second chance
+DEFAULT_DAYS = (
+    14  # a weekly run covers two weeks, so a day that failed once gets a second chance
+)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # never forward a token
+    def redirect_request(
+        self, req, fp, code, msg, headers, newurl
+    ):  # never forward a token
         return None
 
 
@@ -70,20 +74,31 @@ class Http:
 
     def __init__(self, base: str, token: str, timeout: float = 30.0) -> None:
         parts = urllib.parse.urlsplit(base)
-        if parts.scheme != "https" and parts.hostname not in ("127.0.0.1", "localhost", "::1"):
+        if parts.scheme != "https" and parts.hostname not in (
+            "127.0.0.1",
+            "localhost",
+            "::1",
+        ):
             raise SystemExit("HABITS_API_URL must be https")
         self.base, self.token, self.timeout = base.rstrip("/"), token, timeout
         self.opener = urllib.request.build_opener(_NoRedirect)
 
-    def call(self, method: str, path: str, body: Any = None, params: dict | None = None) -> Any:
+    def call(
+        self, method: str, path: str, body: Any = None, params: dict | None = None
+    ) -> Any:
         clean = {k: v for k, v in (params or {}).items() if v is not None}
         query = f"?{urllib.parse.urlencode(clean, doseq=True)}" if clean else ""
         try:
             request = urllib.request.Request(
-                f"{self.base}{path}{query}", method=method,
+                f"{self.base}{path}{query}",
+                method=method,
                 data=json.dumps(body).encode() if body is not None else None,
-                headers={"Authorization": f"Bearer {self.token}", "X-Empire-Channel": "workflow",
-                         "Content-Type": "application/json"})
+                headers={
+                    "Authorization": f"Bearer {self.token}",
+                    "X-Empire-Channel": "workflow",
+                    "Content-Type": "application/json",
+                },
+            )
             with self.opener.open(request, timeout=self.timeout) as response:
                 raw = response.read()
                 return json.loads(raw) if raw else None
@@ -96,7 +111,9 @@ class Http:
 def pages(http: Http, path: str, params: dict) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     while True:
-        page = http.call("GET", path, params={**params, "limit": PAGE, "offset": len(out)})["items"]
+        page = http.call(
+            "GET", path, params={**params, "limit": PAGE, "offset": len(out)}
+        )["items"]
         out.extend(page)
         if len(page) < PAGE:
             return out
@@ -114,9 +131,19 @@ def run(http: Http, today: date, days: int, *, dry_run: bool) -> dict[str, Any]:
     if not habits:
         return counts
     start, end = today - timedelta(days=days), today - timedelta(days=1)
-    done = {(log["habit_id"], str(log["log_date"])[:10]) for log in
-            pages(http, "/v1/habit-logs", {"from": start.isoformat(), "to": end.isoformat(),
-                                           "completed": "true", "order": "asc"})}
+    done = {
+        (log["habit_id"], str(log["log_date"])[:10])
+        for log in pages(
+            http,
+            "/v1/habit-logs",
+            {
+                "from": start.isoformat(),
+                "to": end.isoformat(),
+                "completed": "true",
+                "order": "asc",
+            },
+        )
+    }
     for offset in range(days, 0, -1):
         day = today - timedelta(days=offset)
         weekday, stamp = DAY_ABBR[day.weekday()], day.isoformat()
@@ -130,47 +157,100 @@ def run(http: Http, today: date, days: int, *, dry_run: bool) -> dict[str, Any]:
                 counts["granted"] += 1
                 continue
             try:
-                outcome = http.call("PUT", f"/v1/habits/{int(habit['id'])}/logs/{stamp}",
-                                    {"completed": True, "count": 1, "notes": NOTE},
-                                    params={"if_absent": "true"})["outcome"]
+                outcome = http.call(
+                    "PUT",
+                    f"/v1/habits/{int(habit['id'])}/logs/{stamp}",
+                    {"completed": True, "count": 1, "notes": NOTE},
+                    params={"if_absent": "true"},
+                )["outcome"]
             except ApiError as exc:  # one failed day never blocks the rest; it is retried next run (the 14-day window overlaps)
                 counts["errors"] += 1
-                print(json.dumps({"event": "habits.autogrant.log_failed", "habit_id": habit["id"], "date": stamp,
-                                  "detail": str(exc)}), file=sys.stderr)
+                print(
+                    json.dumps(
+                        {
+                            "event": "habits.autogrant.log_failed",
+                            "habit_id": habit["id"],
+                            "date": stamp,
+                            "detail": str(exc),
+                        }
+                    ),
+                    file=sys.stderr,
+                )
                 continue
             counts["granted" if outcome in ("created", "updated") else "skipped"] += 1
     return counts
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="habits-autogrant", description=__doc__.splitlines()[0])
-    parser.add_argument("--dry-run", action="store_true", help="count what would be granted; write nothing")
-    parser.add_argument("--days", type=int, default=DEFAULT_DAYS,
-                        help=f"how many past days to cover (1-{MAX_DAYS}, default {DEFAULT_DAYS})")
+    parser = argparse.ArgumentParser(
+        prog="habits-autogrant", description=__doc__.splitlines()[0]
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="count what would be granted; write nothing",
+    )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=DEFAULT_DAYS,
+        help=f"how many past days to cover (1-{MAX_DAYS}, default {DEFAULT_DAYS})",
+    )
     args = parser.parse_args(argv)
     if not 1 <= args.days <= MAX_DAYS:
         parser.error(f"--days must be between 1 and {MAX_DAYS}")
     env = os.environ
-    url, token = env.get("HABITS_API_URL", "").strip(), env.get("HABITS_AUTOGRANT_TOKEN", "").strip()
-    missing = [k for k, v in (("HABITS_API_URL", url), ("HABITS_AUTOGRANT_TOKEN", token)) if not v]
+    url, token = (
+        env.get("HABITS_API_URL", "").strip(),
+        env.get("HABITS_AUTOGRANT_TOKEN", "").strip(),
+    )
+    missing = [
+        k
+        for k, v in (("HABITS_API_URL", url), ("HABITS_AUTOGRANT_TOKEN", token))
+        if not v
+    ]
     if missing:
-        print(json.dumps({"event": "habits.autogrant", "error": "missing_config", "missing": missing}))
+        print(
+            json.dumps(
+                {
+                    "event": "habits.autogrant",
+                    "error": "missing_config",
+                    "missing": missing,
+                }
+            )
+        )
         return 2
     if bad_value(url) or bad_value(token):  # fixed message: never echo either value
         print(json.dumps({"event": "habits.autogrant", "error": "invalid_config"}))
         return 2
     today = datetime.now(BANGKOK).date()
     try:
-        counts = run(Http(url, token), today, args.days,
-                     dry_run=args.dry_run)
+        counts = run(Http(url, token), today, args.days, dry_run=args.dry_run)
     except RequestError:
         print(json.dumps({"event": "habits.autogrant", "error": "request_failed"}))
         return 1
     except (ApiError, OSError, urllib.error.URLError) as exc:
-        print(json.dumps({"event": "habits.autogrant", "error": type(exc).__name__, "detail": str(exc)[:200]}))
+        print(
+            json.dumps(
+                {
+                    "event": "habits.autogrant",
+                    "error": type(exc).__name__,
+                    "detail": str(exc)[:200],
+                }
+            )
+        )
         return 1
-    print(json.dumps({"event": "habits.autogrant", "dry_run": args.dry_run, "days": args.days,
-                      "today": today.isoformat(), **counts}))
+    print(
+        json.dumps(
+            {
+                "event": "habits.autogrant",
+                "dry_run": args.dry_run,
+                "days": args.days,
+                "today": today.isoformat(),
+                **counts,
+            }
+        )
+    )
     return 1 if counts["errors"] else 0
 
 

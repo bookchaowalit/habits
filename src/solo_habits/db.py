@@ -34,7 +34,10 @@ from psycopg import sql
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # The image installs the package (site-packages) and copies migrations/ and db/ to /app.
-APP_ROOT = Path(os.environ.get("HABITS_APP_ROOT") or (REPO_ROOT if (REPO_ROOT / "migrations").is_dir() else "/app"))
+APP_ROOT = Path(
+    os.environ.get("HABITS_APP_ROOT")
+    or (REPO_ROOT if (REPO_ROOT / "migrations").is_dir() else "/app")
+)
 MIGRATIONS = APP_ROOT / "migrations"
 ROLES_SQL = APP_ROOT / "db" / "roles.sql"
 DATABASE = "habits"
@@ -42,7 +45,11 @@ SUPERUSER = "postgres"
 MIGRATOR = "habits_migrator"
 RUNTIME_ROLES = ("habits_api", "habits_publisher")
 PORT = 5434
-SECRETS = Path(os.environ.get("HABITS_DB_SECRETS", Path.home() / ".config" / "solo-habits" / "db.env"))
+SECRETS = Path(
+    os.environ.get(
+        "HABITS_DB_SECRETS", Path.home() / ".config" / "solo-habits" / "db.env"
+    )
+)
 
 
 def pg_bin_dir() -> Path:
@@ -60,7 +67,9 @@ def pg_bin_dir() -> Path:
     found = shutil.which("pg_ctl")
     if found:
         return Path(found).parent
-    raise SystemExit("PostgreSQL binaries not found; install the dev extra or set HABITS_PG_BIN")
+    raise SystemExit(
+        "PostgreSQL binaries not found; install the dev extra or set HABITS_PG_BIN"
+    )
 
 
 @dataclass
@@ -71,32 +80,68 @@ class LocalCluster:
     socket_dir: Path
 
     def _run(self, *args: str) -> None:
-        subprocess.run([str(pg_bin_dir() / args[0]), *args[1:]], check=True, capture_output=True, text=True)
+        subprocess.run(
+            [str(pg_bin_dir() / args[0]), *args[1:]],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
     def init(self) -> None:
-        self._run("initdb", "-D", str(self.data_dir), "-U", SUPERUSER, "--auth=trust", "--encoding=UTF8", "--locale=C")
+        self._run(
+            "initdb",
+            "-D",
+            str(self.data_dir),
+            "-U",
+            SUPERUSER,
+            "--auth=trust",
+            "--encoding=UTF8",
+            "--locale=C",
+        )
 
     def start(self) -> None:
         self.socket_dir.mkdir(parents=True, exist_ok=True)
         options = f"-c listen_addresses='' -k {self.socket_dir} -p {PORT}"
-        self._run("pg_ctl", "-D", str(self.data_dir), "-o", options, "-w", "-l", str(self.data_dir / "server.log"),
-                  "start")
+        self._run(
+            "pg_ctl",
+            "-D",
+            str(self.data_dir),
+            "-o",
+            options,
+            "-w",
+            "-l",
+            str(self.data_dir / "server.log"),
+            "start",
+        )
 
     def stop(self) -> None:
         if (self.data_dir / "postmaster.pid").exists():
             self._run("pg_ctl", "-D", str(self.data_dir), "-m", "fast", "-w", "stop")
 
-    def connect(self, role: str, dbname: str = DATABASE, **kwargs) -> psycopg.Connection:
-        return psycopg.connect(f"host={self.socket_dir} port={PORT} user={role} dbname={dbname}", **kwargs)
+    def connect(
+        self, role: str, dbname: str = DATABASE, **kwargs
+    ) -> psycopg.Connection:
+        return psycopg.connect(
+            f"host={self.socket_dir} port={PORT} user={role} dbname={dbname}", **kwargs
+        )
 
     def bootstrap(self) -> None:
         with self.connect(SUPERUSER, "postgres", autocommit=True) as conn:
             conn.execute(ROLES_SQL.read_text(encoding="utf-8"))
-            if not conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (DATABASE,)).fetchone():
-                conn.execute(sql.SQL("CREATE DATABASE {} OWNER {}").format(sql.Identifier(DATABASE),
-                                                                          sql.Identifier(MIGRATOR)))
-            conn.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
-                sql.Identifier(DATABASE), sql.SQL(", ").join(map(sql.Identifier, RUNTIME_ROLES))))
+            if not conn.execute(
+                "SELECT 1 FROM pg_database WHERE datname = %s", (DATABASE,)
+            ).fetchone():
+                conn.execute(
+                    sql.SQL("CREATE DATABASE {} OWNER {}").format(
+                        sql.Identifier(DATABASE), sql.Identifier(MIGRATOR)
+                    )
+                )
+            conn.execute(
+                sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                    sql.Identifier(DATABASE),
+                    sql.SQL(", ").join(map(sql.Identifier, RUNTIME_ROLES)),
+                )
+            )
 
 
 @dataclass
@@ -110,7 +155,9 @@ class HostedCluster:
         urls: dict[str, str] = {}
         if secrets_file.is_file():
             if secrets_file.stat().st_mode & 0o077:
-                raise SystemExit(f"{secrets_file} must be readable by its owner only (chmod 600)")
+                raise SystemExit(
+                    f"{secrets_file} must be readable by its owner only (chmod 600)"
+                )
             for line in secrets_file.read_text(encoding="utf-8").splitlines():
                 key, sep, value = line.strip().partition("=")
                 if sep and key.startswith("HABITS_DB_URL_"):
@@ -120,10 +167,18 @@ class HostedCluster:
                 urls[key.removeprefix("HABITS_DB_URL_").lower()] = value
         return cls(urls)
 
-    def connect(self, role: str, dbname: str = DATABASE, **kwargs) -> psycopg.Connection:
-        key = {MIGRATOR: "migrator", "habits_api": "api", "habits_publisher": "publisher"}.get(role, role)
+    def connect(
+        self, role: str, dbname: str = DATABASE, **kwargs
+    ) -> psycopg.Connection:
+        key = {
+            MIGRATOR: "migrator",
+            "habits_api": "api",
+            "habits_publisher": "publisher",
+        }.get(role, role)
         if key not in self.urls:
-            raise SystemExit(f"no connection URL for {role}: set HABITS_DB_URL_{key.upper()}")
+            raise SystemExit(
+                f"no connection URL for {role}: set HABITS_DB_URL_{key.upper()}"
+            )
         # Short connect timeout; Neon wakes a suspended compute within a few seconds.
         return psycopg.connect(self.urls[key], connect_timeout=15, **kwargs)
 
@@ -139,13 +194,19 @@ def migrate(cluster: LocalCluster | HostedCluster) -> list[str]:
     """Apply pending migrations as the migrator; refuse edited ones."""
     applied: list[str] = []
     with cluster.connect(MIGRATOR) as conn:
-        conn.execute("CREATE TABLE IF NOT EXISTS public.schema_migrations ("
-                     " name text PRIMARY KEY, sha256 text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS public.schema_migrations ("
+            " name text PRIMARY KEY, sha256 text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())"
+        )
         conn.commit()
-        done = dict(conn.execute("SELECT name, sha256 FROM public.schema_migrations").fetchall())
+        done = dict(
+            conn.execute("SELECT name, sha256 FROM public.schema_migrations").fetchall()
+        )
         files = sorted(MIGRATIONS.glob("*.sql"))
         if not files:
-            raise SystemExit(f"no migrations found in {MIGRATIONS}; set HABITS_APP_ROOT")
+            raise SystemExit(
+                f"no migrations found in {MIGRATIONS}; set HABITS_APP_ROOT"
+            )
         for path in files:
             text = path.read_text(encoding="utf-8")
             digest = hashlib.sha256(text.encode()).hexdigest()
@@ -155,7 +216,10 @@ def migrate(cluster: LocalCluster | HostedCluster) -> list[str]:
                 continue
             with conn.transaction():
                 conn.execute(text)
-                conn.execute("INSERT INTO public.schema_migrations (name, sha256) VALUES (%s, %s)", (path.name, digest))
+                conn.execute(
+                    "INSERT INTO public.schema_migrations (name, sha256) VALUES (%s, %s)",
+                    (path.name, digest),
+                )
             applied.append(path.name)
     return applied
 
@@ -166,15 +230,23 @@ NEON_API = "https://console.neon.tech/api/v2"
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # never forward the API key
+    def redirect_request(
+        self, req, fp, code, msg, headers, newurl
+    ):  # never forward the API key
         return None
 
 
 def _neon(key: str, method: str, path: str, body: dict | None = None) -> dict:
-    request = urllib.request.Request(f"{NEON_API}{path}", method=method,
-                                     data=json.dumps(body).encode() if body is not None else None,
-                                     headers={"Authorization": f"Bearer {key}", "Accept": "application/json",
-                                              "Content-Type": "application/json"})
+    request = urllib.request.Request(
+        f"{NEON_API}{path}",
+        method=method,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+    )
     opener = urllib.request.build_opener(_NoRedirect)
     for attempt in range(15):
         try:
@@ -182,16 +254,22 @@ def _neon(key: str, method: str, path: str, body: dict | None = None) -> dict:
                 raw = response.read()
                 return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as error:
-            if error.code == 423 and attempt < 14:  # a running operation holds the project
+            if (
+                error.code == 423 and attempt < 14
+            ):  # a running operation holds the project
                 time.sleep(2)
                 continue
-            raise SystemExit(f"neon {method} {path.split('?')[0]}: {error.code}") from None
+            raise SystemExit(
+                f"neon {method} {path.split('?')[0]}: {error.code}"
+            ) from None
     raise SystemExit("neon project stayed locked")
 
 
 def _url(host: str, role: str, password: str) -> str:
-    return (f"postgresql://{urllib.parse.quote(role)}:{urllib.parse.quote(password, safe='')}@{host}/{DATABASE}"
-            "?sslmode=require&channel_binding=require")
+    return (
+        f"postgresql://{urllib.parse.quote(role)}:{urllib.parse.quote(password, safe='')}@{host}/{DATABASE}"
+        "?sslmode=require&channel_binding=require"
+    )
 
 
 def _write_private(path: Path, content: str) -> None:
@@ -213,26 +291,48 @@ def provision(project_name: str, region: str) -> str:
     key = os.environ.get("NEON_API_KEY")
     if not key:
         raise SystemExit("NEON_API_KEY is not set (inject it from the secret store)")
-    found = [p for p in _neon(key, "GET", f"/projects?search={urllib.parse.quote(project_name)}").get("projects", [])
-             if p["name"] == project_name]
+    found = [
+        p
+        for p in _neon(
+            key, "GET", f"/projects?search={urllib.parse.quote(project_name)}"
+        ).get("projects", [])
+        if p["name"] == project_name
+    ]
     if found:
         project = found[0]["id"]
     else:
-        created = _neon(key, "POST", "/projects", {"project": {"name": project_name, "region_id": region,
-                                                               "pg_version": 16}})
+        created = _neon(
+            key,
+            "POST",
+            "/projects",
+            {"project": {"name": project_name, "region_id": region, "pg_version": 16}},
+        )
         project = created["project"]["id"]
         time.sleep(5)
-    branch = next(b for b in _neon(key, "GET", f"/projects/{project}/branches")["branches"]
-                  if b.get("default") or b.get("primary"))["id"]
-    host = next(e for e in _neon(key, "GET", f"/projects/{project}/endpoints")["endpoints"]
-                if e["branch_id"] == branch and e["type"] == "read_write")["host"]
+    branch = next(
+        b
+        for b in _neon(key, "GET", f"/projects/{project}/branches")["branches"]
+        if b.get("default") or b.get("primary")
+    )["id"]
+    host = next(
+        e
+        for e in _neon(key, "GET", f"/projects/{project}/endpoints")["endpoints"]
+        if e["branch_id"] == branch and e["type"] == "read_write"
+    )["host"]
     base = f"/projects/{project}/branches/{branch}"
     if MIGRATOR not in {r["name"] for r in _neon(key, "GET", f"{base}/roles")["roles"]}:
         _neon(key, "POST", f"{base}/roles", {"role": {"name": MIGRATOR}})
         time.sleep(3)
     password = _neon(key, "GET", f"{base}/roles/{MIGRATOR}/reveal_password")["password"]
-    if DATABASE not in {d["name"] for d in _neon(key, "GET", f"{base}/databases")["databases"]}:
-        _neon(key, "POST", f"{base}/databases", {"database": {"name": DATABASE, "owner_name": MIGRATOR}})
+    if DATABASE not in {
+        d["name"] for d in _neon(key, "GET", f"{base}/databases")["databases"]
+    }:
+        _neon(
+            key,
+            "POST",
+            f"{base}/databases",
+            {"database": {"name": DATABASE, "owner_name": MIGRATOR}},
+        )
         time.sleep(3)
     existing = HostedCluster.from_env().urls
     urls = {"migrator": _url(host, MIGRATOR, password)}
@@ -240,26 +340,51 @@ def provision(project_name: str, region: str) -> str:
         for role in RUNTIME_ROLES:
             short = role.removeprefix("habits_")
             known = existing.get(short)
-            role_password = urllib.parse.unquote(urllib.parse.urlsplit(known).password or "") if known else ""
+            role_password = (
+                urllib.parse.unquote(urllib.parse.urlsplit(known).password or "")
+                if known
+                else ""
+            )
             role_password = role_password or secrets.token_urlsafe(32)
-            present = conn.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,)).fetchone()
-            conn.execute(sql.SQL(
-                "{} ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT PASSWORD {}").format(
-                    sql.SQL("ALTER" if present else "CREATE"), sql.Identifier(role), sql.Literal(role_password)))
+            present = conn.execute(
+                "SELECT 1 FROM pg_roles WHERE rolname = %s", (role,)
+            ).fetchone()
+            conn.execute(
+                sql.SQL(
+                    "{} ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT PASSWORD {}"
+                ).format(
+                    sql.SQL("ALTER" if present else "CREATE"),
+                    sql.Identifier(role),
+                    sql.Literal(role_password),
+                )
+            )
             urls[short] = _url(host, role, role_password)
-        conn.execute(sql.SQL("REVOKE ALL ON DATABASE {} FROM PUBLIC").format(sql.Identifier(DATABASE)))
-        conn.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
-            sql.Identifier(DATABASE), sql.SQL(", ").join(map(sql.Identifier, RUNTIME_ROLES))))
+        conn.execute(
+            sql.SQL("REVOKE ALL ON DATABASE {} FROM PUBLIC").format(
+                sql.Identifier(DATABASE)
+            )
+        )
+        conn.execute(
+            sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+                sql.Identifier(DATABASE),
+                sql.SQL(", ").join(map(sql.Identifier, RUNTIME_ROLES)),
+            )
+        )
         conn.execute("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
     lines = ["# solo-habits hosted database; owner-only, never commit or print\n"]
-    lines += [f"HABITS_DB_URL_{name.upper()}={value}\n" for name, value in sorted(urls.items())]
+    lines += [
+        f"HABITS_DB_URL_{name.upper()}={value}\n"
+        for name, value in sorted(urls.items())
+    ]
     _write_private(SECRETS, "".join(lines))
     migrate(HostedCluster(urls))
     return project
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="habits-db", description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(
+        prog="habits-db", description=__doc__.splitlines()[0]
+    )
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("migrate")
     prov = sub.add_parser("provision")

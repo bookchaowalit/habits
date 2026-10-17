@@ -9,32 +9,91 @@ from solo_habits import mcp_server as mod
 from solo_habits.mcp_server import build_server
 
 API_KEY = "EMPIRE_HABITS_API"
-READS = {"habits.habit.list", "habits.habit.get", "habits.habit.streaks", "habits.habit.stats", "habits.habit.logs",
-         "habits.routine.list", "habits.routine.get", "habits.routine.stats", "habits.routine.logs"}
+READS = {
+    "habits.habit.list",
+    "habits.habit.get",
+    "habits.habit.streaks",
+    "habits.habit.stats",
+    "habits.habit.logs",
+    "habits.routine.list",
+    "habits.routine.get",
+    "habits.routine.stats",
+    "habits.routine.logs",
+}
 WRITES = {"habits.habit.log", "habits.routine.log"}
-ARGS = {"habits.habit.get": {"id": 1}, "habits.routine.get": {"id": 2},
-        "habits.habit.log": {"habit_id": 1, "log_date": "2026-10-12", "completed": True},
-        "habits.routine.log": {"routine_id": 2, "log_date": "2026-10-12", "mood_after": 4}}
+ARGS = {
+    "habits.habit.get": {"id": 1},
+    "habits.routine.get": {"id": 2},
+    "habits.habit.log": {"habit_id": 1, "log_date": "2026-10-12", "completed": True},
+    "habits.routine.log": {"routine_id": 2, "log_date": "2026-10-12", "mood_after": 4},
+}
 SAMPLES = [
-    ("habits.habit.list", {"status": ["active"], "limit": 5}, "GET", "/v1/habits", {"status": "active", "limit": "5", "offset": "0"}),
+    (
+        "habits.habit.list",
+        {"status": ["active"], "limit": 5},
+        "GET",
+        "/v1/habits",
+        {"status": "active", "limit": "5", "offset": "0"},
+    ),
     ("habits.habit.get", {"id": 7}, "GET", "/v1/habits/7", {}),
-    ("habits.habit.logs", {"habit_id": 7, "date_from": "2026-10-01"}, "GET", "/v1/habit-logs",
-     {"habit_id": "7", "from": "2026-10-01", "order": "desc", "limit": "100", "offset": "0"}),
-    ("habits.habit.log", {"habit_id": 7, "log_date": "2026-10-12", "count": 2, "if_absent": True}, "PUT",
-     "/v1/habits/7/logs/2026-10-12", {"if_absent": "true"}),
+    (
+        "habits.habit.logs",
+        {"habit_id": 7, "date_from": "2026-10-01"},
+        "GET",
+        "/v1/habit-logs",
+        {
+            "habit_id": "7",
+            "from": "2026-10-01",
+            "order": "desc",
+            "limit": "100",
+            "offset": "0",
+        },
+    ),
+    (
+        "habits.habit.log",
+        {"habit_id": 7, "log_date": "2026-10-12", "count": 2, "if_absent": True},
+        "PUT",
+        "/v1/habits/7/logs/2026-10-12",
+        {"if_absent": "true"},
+    ),
 ]
 
 
 def test_streaks_projects_only_streak_fields():
-    fake = Fake(body={"items": [{"id": 1, "name": "run", "slug": "run", "status": "active", "current_streak": 3,
-                                 "best_streak": 9, "last_completed_at": None, "notes": "private"}]})
+    fake = Fake(
+        body={
+            "items": [
+                {
+                    "id": 1,
+                    "name": "run",
+                    "slug": "run",
+                    "status": "active",
+                    "current_streak": 3,
+                    "best_streak": 9,
+                    "last_completed_at": None,
+                    "notes": "private",
+                }
+            ]
+        }
+    )
     out = call(server(fake), "habits.habit.streaks")
     text = out.content[0].text
     assert '"current_streak": 3' in text and "private" not in text
 
 
-IDENTITY = {"actor": "x", "workspace_id": "w", "workspace": "w", "tenant_id": "t", "delegation": "d", "token": "t",
-            "authorization": "Bearer x", "sub": "s", "actor_id": "a", "tenant": "t", "owner_id": "o"}
+IDENTITY = {
+    "actor": "x",
+    "workspace_id": "w",
+    "workspace": "w",
+    "tenant_id": "t",
+    "delegation": "d",
+    "token": "t",
+    "authorization": "Bearer x",
+    "sub": "s",
+    "actor_id": "a",
+    "tenant": "t",
+    "owner_id": "o",
+}
 
 
 class Fake:
@@ -48,7 +107,10 @@ class Fake:
         def handle(request: httpx.Request) -> httpx.Response:
             self.requests.append(request)
             return httpx.Response(self.status, json=self.body)
-        return httpx.Client(transport=httpx.MockTransport(handle), base_url="https://api.test")
+
+        return httpx.Client(
+            transport=httpx.MockTransport(handle), base_url="https://api.test"
+        )
 
 
 def server(fake: Fake, read_only: bool = False):
@@ -117,13 +179,30 @@ def test_sample_calls_map_to_the_api():
         assert dict(request.url.params) == params, name
 
 
-@pytest.mark.parametrize("status,message", [(400, "400: invalid"), (401, "401: unauthorized"), (403, "403: forbidden"),
-                                             (404, "404: not_found"), (409, "409: conflict"), (422, "422: invalid"),
-                                             (429, "429: rate_limited"), (500, "500: upstream_error"),
-                                             (503, "503: upstream_error"), (418, "418: error")])
+@pytest.mark.parametrize(
+    "status,message",
+    [
+        (400, "400: invalid"),
+        (401, "401: unauthorized"),
+        (403, "403: forbidden"),
+        (404, "404: not_found"),
+        (409, "409: conflict"),
+        (422, "422: invalid"),
+        (429, "429: rate_limited"),
+        (500, "500: upstream_error"),
+        (503, "503: upstream_error"),
+        (418, "418: error"),
+    ],
+)
 def test_errors_are_a_fixed_message_from_the_status_only(status, message):
-    secret = {"detail": {"error": "forbidden", "reason": "leak-reason", "secret": "tok-123 do-not-leak"},
-              "error": {"code": "leak-code", "message": "do-not-leak"}}
+    secret = {
+        "detail": {
+            "error": "forbidden",
+            "reason": "leak-reason",
+            "secret": "tok-123 do-not-leak",
+        },
+        "error": {"code": "leak-code", "message": "do-not-leak"},
+    }
     name = sorted(READS)[0]
     with pytest.raises(Exception) as caught:
         call(server(Fake(status=status, body=secret)), name, ARGS.get(name, {}))
@@ -133,32 +212,57 @@ def test_errors_are_a_fixed_message_from_the_status_only(status, message):
 
 def test_token_with_whitespace_or_control_characters_is_refused_without_echo():
     name = sorted(READS)[0]
-    for bad in ("two words-abcdefgh", "line\nbreak-abcdefgh", "tab\there-abcdefgh", "nul\x00byte-abcdefgh", "   "):
+    for bad in (
+        "two words-abcdefgh",
+        "line\nbreak-abcdefgh",
+        "tab\there-abcdefgh",
+        "nul\x00byte-abcdefgh",
+        "   ",
+    ):
         fake = Fake()
         srv = build_server(fake.client(), lambda bad=bad: bad).server
         with pytest.raises(Exception) as caught:
             call(srv, name, ARGS.get(name, {}))
-        assert str(caught.value).endswith("401: unauthorized") and "abcdefgh" not in str(caught.value)
+        assert str(caught.value).endswith(
+            "401: unauthorized"
+        ) and "abcdefgh" not in str(caught.value)
         assert fake.requests == []
 
 
 def test_no_tool_exposes_a_forbidden_argument_name():
-    forbidden = {"actor", "actor_id", "workspace", "workspace_id", "tenant", "tenant_id", "delegation", "token",
-                 "authorization", "owner_id"}
+    forbidden = {
+        "actor",
+        "actor_id",
+        "workspace",
+        "workspace_id",
+        "tenant",
+        "tenant_id",
+        "delegation",
+        "token",
+        "authorization",
+        "owner_id",
+    }
     assert forbidden == set(mod.FORBIDDEN_ARGUMENTS)
     for tool in asyncio.run(server(Fake()).list_tools()):
         assert not forbidden & set(tool.input_schema["properties"]), tool.name
     with pytest.raises(ValueError):
+
         class Bad(mod.Strict):
             actor: str = "x"
-        mod.Toolbox("x", "x", Fake().client(), lambda: "t").tool("x.bad", Bad, "bad")(lambda a: a)
+
+        mod.Toolbox("x", "x", Fake().client(), lambda: "t").tool("x.bad", Bad, "bad")(
+            lambda a: a
+        )
 
 
 def test_transport_failure_does_not_echo_the_error():
     def boom(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("Authorization: Bearer tok-123 refused")
-    srv = build_server(httpx.Client(transport=httpx.MockTransport(boom), base_url="https://api.test"),
-                       lambda: "tok-123").server
+
+    srv = build_server(
+        httpx.Client(transport=httpx.MockTransport(boom), base_url="https://api.test"),
+        lambda: "tok-123",
+    ).server
     with pytest.raises(Exception) as caught:
         call(srv, sorted(READS)[0], ARGS.get(sorted(READS)[0], {}))
     assert "tok-123" not in str(caught.value) and "503" in str(caught.value)
@@ -167,7 +271,12 @@ def test_transport_failure_does_not_echo_the_error():
 def test_url_must_be_https_or_loopback(tmp_path):
     assert mod.api_url(API_KEY, {API_KEY: "https://x.example"}) == "https://x.example"
     assert mod.api_url(API_KEY, {API_KEY: "http://127.0.0.1:9"}) == "http://127.0.0.1:9"
-    for bad in ("http://example.com", "https://u:p@x.example", "https://x.example?a=1", "https://x.example#f"):
+    for bad in (
+        "http://example.com",
+        "https://u:p@x.example",
+        "https://x.example?a=1",
+        "https://x.example#f",
+    ):
         with pytest.raises(mod.ConfigError):
             mod.api_url(API_KEY, {API_KEY: bad})
     with pytest.raises(mod.ConfigError):
@@ -182,8 +291,16 @@ def test_token_order_and_file_mode(tmp_path):
         mod.bearer({"EMPIRE_TOKEN_FILE": str(token_file)})
     token_file.chmod(0o600)
     assert mod.bearer({"EMPIRE_TOKEN_FILE": str(token_file)}) == "from-file"
-    assert mod.bearer({"EMPIRE_TOKEN": "env", "EMPIRE_TOKEN_FILE": str(token_file)}) == "env"
-    assert mod.bearer({"EMPIRE_MCP_AUTOMATION": "x-y", "EMPIRE_AUTOMATION_TOKEN_X_Y": "auto"}) == "auto"
+    assert (
+        mod.bearer({"EMPIRE_TOKEN": "env", "EMPIRE_TOKEN_FILE": str(token_file)})
+        == "env"
+    )
+    assert (
+        mod.bearer(
+            {"EMPIRE_MCP_AUTOMATION": "x-y", "EMPIRE_AUTOMATION_TOKEN_X_Y": "auto"}
+        )
+        == "auto"
+    )
 
 
 def test_automation_name_is_validated_and_tokens_are_cleaned(tmp_path):
@@ -214,14 +331,22 @@ def test_validation_errors_are_fixed_and_name_no_argument_or_value():
     rejected = {}
     for name in sorted(READS | WRITES):
         tool = next(t for t in asyncio.run(srv.list_tools()) if t.name == name)
-        attempts = [{"UNTRUSTED_MARKER": "VALUE_MARKER"}, {**ARGS.get(name, {}), "UNTRUSTED_MARKER": 1}]
-        attempts += [{**ARGS.get(name, {}), field: {"k": "VALUE_MARKER"}} for field in tool.input_schema["properties"]]
+        attempts = [
+            {"UNTRUSTED_MARKER": "VALUE_MARKER"},
+            {**ARGS.get(name, {}), "UNTRUSTED_MARKER": 1},
+        ]
+        attempts += [
+            {**ARGS.get(name, {}), field: {"k": "VALUE_MARKER"}}
+            for field in tool.input_schema["properties"]
+        ]
         for args in attempts:
             try:
                 call(srv, name, args)
             except Exception as exc:  # noqa: BLE001
                 rejected[name] = rejected.get(name, 0) + 1
-                assert str(exc).endswith("invalid_arguments") and "MARKER" not in str(exc)
+                assert str(exc).endswith("invalid_arguments") and "MARKER" not in str(
+                    exc
+                )
                 assert exc.__cause__ is None and exc.__context__ is None
                 for link in _chain(exc):
                     assert "MARKER" not in str(link) and "MARKER" not in repr(link)
