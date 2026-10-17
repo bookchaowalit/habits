@@ -711,6 +711,7 @@ def create_app(
     def load(
         conn: psycopg.Connection, kind: Kind, record_id: int, *, lock: bool = False
     ) -> dict[str, Any]:
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- table/column names are module constants or spec-validated identifiers; values are bound as %s parameters
         row = conn.execute(
             f"SELECT {kind.select} FROM {kind.table} WHERE id = %s{' FOR UPDATE' if lock else ''}",
             (record_id,),
@@ -793,6 +794,7 @@ def create_app(
                 )
             allow(caller, kind.permission("read"), kind.name)
             with bound(caller) as conn:
+                # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- group_by is checked against a fixed allow-list before use; values are %s parameters
                 rows = conn.execute(
                     f"SELECT {group_by} AS key, count(*) AS n FROM {kind.table} GROUP BY 1"
                 ).fetchall()
@@ -806,6 +808,7 @@ def create_app(
         def by_slug(slug: str, caller: Caller):
             allow(caller, kind.permission("read"), kind.name, not_found=True)
             with bound(caller) as conn:
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- table/column names are module constants or spec-validated identifiers; values are bound as %s parameters
                 row = conn.execute(
                     f"SELECT {kind.select} FROM {kind.table} WHERE slug = %s", (slug,)
                 ).fetchone()
@@ -850,6 +853,7 @@ def create_app(
 
             def op(work: Work) -> Plan:
                 if reserved is not None:
+                    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- table/column names are module constants or spec-validated identifiers; values are bound as %s parameters
                     existing = work.conn.execute(
                         f"SELECT {kind.select} FROM {kind.table} WHERE id = %s",
                         (reserved,),
@@ -954,6 +958,7 @@ def create_app(
         def delete(record_id: int, caller: Caller, background: BackgroundTasks) -> None:
             def op(work: Work) -> Plan:
                 before = load(work.conn, kind, record_id, lock=True)
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- table/column names are module constants or spec-validated identifiers; values are bound as %s parameters
                 work.conn.execute(
                     f"DELETE FROM {kind.table} WHERE id = %s", (record_id,)
                 )
@@ -1092,6 +1097,7 @@ def create_app(
                 ).fetchone()
                 if before is None:
                     raise HTTPException(status_code=404, detail={"error": "not_found"})
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- table/column names are module constants or spec-validated identifiers; values are bound as %s parameters
                 work.conn.execute(
                     f"DELETE FROM {kind.log_table} WHERE id = %s", (before["id"],)
                 )
