@@ -43,10 +43,18 @@ def cluster() -> Iterator[LocalCluster]:
 @pytest.fixture(scope="session")
 def keys() -> tuple[str, str]:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    private = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-                                serialization.NoEncryption()).decode()
-    public = key.public_key().public_bytes(serialization.Encoding.PEM,
-                                           serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    private = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    public = (
+        key.public_key()
+        .public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+        .decode()
+    )
     return private, public
 
 
@@ -77,10 +85,16 @@ class FakePlatform:
             execution = self.keys[idempotency_key]
             return execution, True, self.executions[execution]["status"]
         for needed in [action.action, *(also or [])]:
-            if not self.decide(token, channel, Action(needed, action.resource_type, action.resource_id)):
+            if not self.decide(
+                token, channel, Action(needed, action.resource_type, action.resource_id)
+            ):
                 raise Denied(403, "deny", "no_permission")
         execution = uuid.uuid4()
-        self.executions[execution] = {"action": action.action, "status": "running", "actor": self._actor(token)}
+        self.executions[execution] = {
+            "action": action.action,
+            "status": "running",
+            "actor": self._actor(token),
+        }
         if idempotency_key:
             self.keys[idempotency_key] = execution
         return execution, False, "running"
@@ -107,8 +121,12 @@ def platform() -> FakePlatform:
 @pytest.fixture
 def client(cluster, keys, platform) -> TestClient:
     _, public = keys
-    app = create_app(lambda: cluster.connect("habits_api"), TokenVerifier(public, ISSUER), platform,
-                     publisher_token=lambda: None)
+    app = create_app(
+        lambda: cluster.connect("habits_api"),
+        TokenVerifier(public, ISSUER),
+        platform,
+        publisher_token=lambda: None,
+    )
     return TestClient(app)
 
 
@@ -116,18 +134,38 @@ def client(cluster, keys, platform) -> TestClient:
 def token(keys):
     private, _ = keys
 
-    def make(sub: uuid.UUID, ws: uuid.UUID, *, audience: Any = ("habits-api", "platform-api"), ttl: int = 600,
-             delegation: uuid.UUID | None = None) -> dict[str, str]:
+    def make(
+        sub: uuid.UUID,
+        ws: uuid.UUID,
+        *,
+        audience: Any = ("habits-api", "platform-api"),
+        ttl: int = 600,
+        delegation: uuid.UUID | None = None,
+    ) -> dict[str, str]:
         now = int(time.time())
-        claims: dict[str, Any] = {"iss": ISSUER, "aud": list(audience) if not isinstance(audience, str) else audience,
-                                  "sub": str(sub), "ws": str(ws), "iat": now, "exp": now + ttl,
-                                  "jti": uuid.uuid4().hex}
+        claims: dict[str, Any] = {
+            "iss": ISSUER,
+            "aud": list(audience) if not isinstance(audience, str) else audience,
+            "sub": str(sub),
+            "ws": str(ws),
+            "iat": now,
+            "exp": now + ttl,
+            "jti": uuid.uuid4().hex,
+        }
         if delegation:
             claims["del"] = str(delegation)
-        return {"Authorization": f"Bearer {jwt.encode(claims, private, algorithm='RS256')}"}
+        return {
+            "Authorization": f"Bearer {jwt.encode(claims, private, algorithm='RS256')}"
+        }
 
     return make
 
 
-OWNER_ACTIONS = {"habits.habit:read", "habits.habit:write", "habits.habit:delete",
-                 "habits.routine:read", "habits.routine:write", "habits.routine:delete"}
+OWNER_ACTIONS = {
+    "habits.habit:read",
+    "habits.habit:write",
+    "habits.habit:delete",
+    "habits.routine:read",
+    "habits.routine:write",
+    "habits.routine:delete",
+}
